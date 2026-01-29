@@ -1,0 +1,308 @@
+// Welcome to ShiftScore Planning & Development //
+
+============================================================
+Project: ShiftScore
+Date started: 2026-01-28
+============================================================
+
+## 1) One-liner
+ShiftScore is a web app for bar owners/managers/employees to record nightly bartender performance inputs, compute a 0–100 ShiftScore, and track performance trends over time.
+
+## 2) Goals (why we’re building it)
+- Give managers a consistent, data-backed way to evaluate shift performance.
+- Help employees understand their strengths/weaknesses and “level up” (gamified, but fair).
+- Make staffing decisions (schedules, premium stations/spots) more transparent and defensible.
+- Track bar performance over time (spot/station, day-of-week, event nights, etc.).
+
+## 3) User roles & permissions (first draft)
+1) Admin/Manager (merged role for now)
+	- Can create/manage a Bar
+	- Can create/manage Spots (stations)
+	- Can invite employees
+	- Can enter shift metrics (manager-only entry for MVP)
+	- Can view team-wide dashboards, reports, and leaderboards
+	- Can edit/void a shift (suggest audit trail later)
+	- (Later) can manage scoring weights/versions
+
+2) Employee
+	- Can view their own history, leaderboard placement, streaks
+	- Leaderboard is public for MVP (all employees can see it)
+
+## 4) Core workflows (MVP)
+### 4.1 Admin/setup
+- Create account
+- Create Bar
+- Create “Spots” (aka stations: Main well / Patio / Service bar / etc.)
+- Invite users (email invite or simple invite link)
+
+### 4.2 Record a shift
+- Admin/Manager selects date + spot + bartender
+- Shift rule (MVP): one bartender = one spot per shift entry
+- Enters shift “inputs” (metrics) (exact math later)
+- App calculates ShiftScore (0–100) and stores both inputs + computed score
+- Notes field for context (busy night, event, short-staffed)
+
+### 4.3 Review performance
+- Admin/Manager dashboard: filter by date range, bartender, spot
+- Employee dashboard: personal trend chart + recent shifts
+- Simple leaderboard: top performers this week/month (public for MVP)
+
+## 5) Nice-to-have workflows (post-MVP)
+- POS integrations (Toast/Square/etc.)
+- Automated imports + reconciliation
+- Goal setting + achievements/badges
+- Coaching notes + manager feedback loops
+- Scheduling suggestions ("based on past Friday performance")
+- Fraud/cheat detection & audit trail
+
+## 6) Data we likely need (draft data model)
+### 6.1 Entities
+- Bar
+  - id, name, timezone, created_at
+
+- User
+  - id, name, email, hashed_password, role (owner/manager/employee)
+
+- BarMembership
+  - id, bar_id, user_id, role_override (optional), status (invited/active)
+
+- Spot (Station)
+  - id, bar_id, name, sort_order, active
+
+- SpotScoreConfig (per-spot scoring config)
+	- id
+	- bar_id
+	- spot_id (1:1 with Spot for MVP)
+	- cap_mode: enum { manual, auto }
+	- Effective caps used for scoring (v1):
+		- sales_volume_low, sales_volume_high
+		- pct_of_bar_sales_low, pct_of_bar_sales_high
+		- tip_pct_low, tip_pct_high
+		- sales_per_hour_low, sales_per_hour_high
+	- Auto-caps metadata (nullable; used when cap_mode=auto):
+		- computed_at
+		- sample_size
+		- window_days (e.g., 90)
+		- low_percentile (e.g., 10)
+		- high_percentile (e.g., 90)
+	- updated_at
+
+- Shift
+	- id, bar_id
+	- date (or start_ts/end_ts), spot_id, bartender_user_id
+	- created_by_user_id (Admin/Manager)
+	- notes
+	- Raw inputs (v1):
+		- personal_sales_volume
+		- total_bar_sales
+		- personal_tips
+		- hours_worked
+		- transactions_count (nullable)
+	- Derived values (v1; optional to store, but convenient):
+		- pct_of_bar_sales
+		- tip_pct
+		- sales_per_hour
+
+- ShiftMetric (or store metrics directly on Shift)
+  - If flexible metrics are needed, store as key/value rows
+  - Alternative: store a typed JSON blob “metrics_json” for MVP
+
+- ScoreResult
+  - shift_id
+  - score_total (0-100)
+  - score_version (so we can change formula over time without breaking history)
+  - breakdown_json (optional: per-metric subscores)
+
+### 6.2 Metric inputs (placeholders; to be refined later)
+- Total sales ($)
+- Tips ($)
+- Tip %
+- Guests served / transactions
+- Avg ticket
+- Speed / ticket times (if available)
+- Upsells / featured item count
+- Mistakes/voids/comped items
+- Hygiene/sidework completion rating (manager-entered)
+
+## 7) Scoring system (placeholder contract)
+### 7.1 v1 inputs (manager-entered)
+Required (per shift entry):
+- personal_sales_volume (USD)
+- total_bar_sales (USD)
+- personal_tips (USD)
+- hours_worked (decimal hours)
+
+Optional:
+- transactions_count (int)
+
+### 7.2 v1 derived metrics
+These are computed from the required inputs and stored (or re-computable):
+- Personal Sales Volume = personal_sales_volume
+- % of Total Bar Sales = personal_sales_volume / total_bar_sales
+- Personal Tip % = personal_tips / personal_sales_volume
+- Sales per Hour = personal_sales_volume / hours_worked
+
+### 7.3 v1 scoring contract (initial, even weights)
+We’ll tune weights later, but for MVP we can start evenly across the 4 metrics.
+
+Contract:
+- The ShiftScore is a number from 0–100.
+- v1 score has four sub-scores (0–25 each) and sums to 0–100.
+- Each sub-score is a normalized value of its metric, mapped into a 0–25 range.
+
+Notes on normalization (MVP-friendly):
+- We need a consistent way to map each metric into [0, 25].
+- For MVP we can use simple min/max caps ("clamp") OR percentile-based scaling later.
+- We should store the chosen approach as score_version="v1" so we can change it later.
+
+Recommended MVP normalization approach (simple clamps, per-spot):
+- We will normalize per Spot (station).
+- Each Spot has low/high caps for each of the 4 metrics.
+- For a given shift, we use the caps for that shift’s Spot to compute subscores.
+- Linear scale each metric into 0–25.
+- Values below low cap score 0; above high cap score 25.
+
+Per-spot caps we’ll need to configure (v1):
+- sales_volume_low, sales_volume_high
+- pct_of_bar_sales_low, pct_of_bar_sales_high
+- tip_pct_low, tip_pct_high
+- sales_per_hour_low, sales_per_hour_high
+
+How we’ll set caps (MVP + future-proof):
+We’ll support TWO modes per Spot:
+
+Mode A) Manual caps (Admin/Manager sets them)
+- Admin/Manager enters low/high caps for each metric in Settings
+- Best when starting out (no data), or when management wants strict targets
+
+Mode B) Auto caps (learn from data over time)
+- System periodically recomputes caps from historical shifts for that Spot
+- Suggested approach: percentile-based caps (robust against outliers)
+	- low cap = P10 (10th percentile)
+	- high cap = P90 (90th percentile)
+- Add guardrails:
+	- Require a minimum sample size (ex: >= 20 shifts in that spot)
+	- Use a rolling window (ex: last 90 days) to adapt to seasonality
+	- Clamp caps to sane absolute min/max so they don’t drift wildly
+
+Implementation note:
+- Store the Spot’s cap mode: cap_mode ∈ {manual, auto}
+- Store the current “effective” caps used for scoring
+- If cap_mode=auto, also store metadata:
+	- computed_at, sample_size, window_days, percentiles_used
+
+Edge cases / validation rules:
+- total_bar_sales must be > 0
+- personal_sales_volume must be >= 0
+- hours_worked must be > 0
+- If personal_sales_volume is 0 then tip % is defined as 0 (avoid divide-by-zero)
+
+Editing/audit (locked for MVP):
+- Edits are allowed and are last-write-wins (no revision history in MVP)
+- (Later) add an audit trail or void + replace workflow
+
+## 8) Pages/screens (first pass)
+Public:
+- Landing page
+- Login / Sign up
+
+Admin/Manager:
+- Dashboard (overview)
+- Shifts: Create Shift, View Shift, Edit/Void (with audit)
+- Employees (list + detail)
+- Spots (create/edit)
+- Reports (filterable)
+- Settings (bar info, scoring version/weights later)
+
+Employee:
+- My Performance (charts + recent shifts)
+- My Shifts (list/detail)
+- Leaderboard (optional)
+
+## 9) Backend/API (first-pass notes)
+We’ll likely have endpoints like:
+- POST /auth/register, POST /auth/login
+- GET/POST /bars
+- GET/POST /bars/{barId}/spots
+- GET/POST /bars/{barId}/shifts
+- GET /bars/{barId}/employees
+- GET /me/performance
+
+## 10) Tech approach (brainstorm)
+Backend:
+- Python + FastAPI (LOCKED) (great for APIs, validation, docs)
+- SQLAlchemy ORM
+
+Database:
+- MySQL (locked)
+	- Dev: local MySQL database
+	- Prod: separate MySQL database
+	- Migrations: Alembic (via SQLAlchemy)
+
+Frontend:
+- Frontend (recommendation for beginners): Vite + React
+	- Why: simplest React setup, fast dev server, fewer “framework rules” than Next.js
+	- Great fit when the backend is a separate FastAPI API
+	- Later we can adopt Next.js if we want SSR/SEO or more advanced routing patterns
+- Charting library for trends (Recharts / Chart.js)
+
+Auth:
+- JWT (access token) + refresh token (later)
+- Role-based access control (RBAC)
+
+Deployment (later):
+- Render/Fly.io/Azure
+- Managed Postgres
+
+## 11) MVP definition (so we don’t boil the ocean)
+MVP =
+- Auth (login/logout)
+- Bars + Spots
+- Create shift entry page
+- Auto-calc ShiftScore
+- Store shift + score
+- Employee personal history page
+- Manager dashboard basic filters
+
+NOT in MVP (for now):
+- POS integrations
+- Complex coaching/badges
+- Scheduling engine
+- Multi-bar enterprise reporting
+
+## 12) Open questions (please answer when ready)
+Answered (locked for MVP):
+- Shift metrics entry: Admin/Manager-only
+- Leaderboard: public
+- Shift definition: one bartender = one spot per shift entry
+- Shift editing: last-write-wins
+
+Remaining questions:
+1) Editing/audit:
+	- Can shifts be edited after submission? If yes, do we keep revision history or only last-write-wins?
+
+2) Scoring fairness/normalization:
+	- Do we normalize by spot/day-of-week? Or purely absolute metrics?
+
+3) Data input friction:
+	- Mobile-first quick entry requirements? Any metrics optional with defaults?
+
+4) Scoring fairness:
+	- How do we normalize for slow nights vs busy nights?
+	- Do we compare within the same spot/day-of-week?
+
+5) Data input friction:
+	- Need quick entry via mobile?
+	- Any metrics must be optional with sensible defaults?
+
+6) Audit/editing:
+	- Can shifts be edited after submission? If yes, do we keep history?
+
+## 13) Next step suggestion
+Pick the MVP metrics (the minimum set) and define the v1 scoring formula contract:
+- list of inputs
+- valid ranges
+- how to normalize
+- how to weight
+- how to handle missing values
+
