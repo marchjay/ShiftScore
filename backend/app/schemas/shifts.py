@@ -18,6 +18,22 @@ class ShiftCreateIn(BaseModel):
     transactions_count: int | None = Field(default=None, ge=0)
 
 
+class ShiftUpdateIn(BaseModel):
+    spot_id: int | None = None
+    bartender_name: str | None = Field(default=None, min_length=1, max_length=80)
+    shift_date: date | None = None
+
+    personal_sales_volume: float | None = Field(default=None, ge=0)
+    total_bar_sales: float | None = Field(default=None, gt=0)
+    personal_tips: float | None = Field(default=None, ge=0)
+    hours_worked: float | None = Field(default=None, gt=0)
+    transactions_count: int | None = Field(default=None, ge=0)
+
+
+class ShiftDeleteOut(BaseModel):
+    deleted: bool
+
+
 class ShiftOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

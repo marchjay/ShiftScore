@@ -43,6 +43,31 @@ type ShiftOut = ShiftCreate & {
   sales_per_hour: number
   score_total?: number | null
   score_version?: string | null
+  breakdown?:
+    | Record<
+        string,
+        {
+          value: number
+          normalized: number
+          points: number
+        }
+      >
+    | null
+}
+
+type ShiftUpdate = {
+  spot_id?: number
+  bartender_name?: string
+  shift_date?: string
+  personal_sales_volume?: number
+  total_bar_sales?: number
+  personal_tips?: number
+  hours_worked?: number
+  transactions_count?: number | null
+}
+
+type ShiftDeleteOut = {
+  deleted: boolean
 }
 
 type LeaderboardEntry = {
@@ -207,6 +232,15 @@ function App() {
   const [isLoadingSpots, setIsLoadingSpots] = useState(false)
   const [isLoadingBartenders, setIsLoadingBartenders] = useState(false)
 
+  const [selectedShiftId, setSelectedShiftId] = useState<number | null>(null)
+  const [selectedShift, setSelectedShift] = useState<ShiftOut | null>(null)
+  const [shiftModalErrorText, setShiftModalErrorText] = useState<string | null>(null)
+  const [isLoadingShiftDetail, setIsLoadingShiftDetail] = useState(false)
+  const [isEditingShift, setIsEditingShift] = useState(false)
+  const [editShiftForm, setEditShiftForm] = useState<ShiftUpdate>({})
+  const [isSavingShift, setIsSavingShift] = useState(false)
+  const [isDeletingShift, setIsDeletingShift] = useState(false)
+
   const [barEditName, setBarEditName] = useState('')
   const [barEditTimezone, setBarEditTimezone] = useState('America/New_York')
 
@@ -300,6 +334,69 @@ function App() {
   }, [token])
 
   const isOwner = me?.role === 'owner'
+
+  function openShiftDetail(shiftId: number) {
+    setSelectedShiftId(shiftId)
+    setSelectedShift(null)
+    setShiftModalErrorText(null)
+    setIsEditingShift(false)
+    setEditShiftForm({})
+  }
+
+  function closeShiftDetail() {
+    setSelectedShiftId(null)
+    setSelectedShift(null)
+    setShiftModalErrorText(null)
+    setIsEditingShift(false)
+    setEditShiftForm({})
+  }
+
+  function formatMoney(value: number): string {
+    if (!Number.isFinite(value)) return '—'
+    return value.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+  }
+
+  function formatPct(value: number): string {
+    if (!Number.isFinite(value)) return '—'
+    return `${(value * 100).toFixed(1)}%`
+  }
+
+  function formatNumber(value: number, digits = 2): string {
+    if (!Number.isFinite(value)) return '—'
+    return value.toFixed(digits)
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      if (!selectedShiftId || !token) return
+      setIsLoadingShiftDetail(true)
+      setShiftModalErrorText(null)
+      try {
+        const detail = await apiGet<ShiftOut>(`/api/shifts/${selectedShiftId}`, token)
+        if (cancelled) return
+        setSelectedShift(detail)
+        setEditShiftForm({
+          spot_id: detail.spot_id,
+          bartender_name: detail.bartender_name,
+          shift_date: detail.shift_date,
+          personal_sales_volume: detail.personal_sales_volume,
+          total_bar_sales: detail.total_bar_sales,
+          personal_tips: detail.personal_tips,
+          hours_worked: detail.hours_worked,
+          transactions_count: detail.transactions_count ?? null,
+        })
+      } catch (e) {
+        if (cancelled) return
+        setShiftModalErrorText(e instanceof Error ? e.message : 'Failed to load shift details')
+      } finally {
+        if (!cancelled) setIsLoadingShiftDetail(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [selectedShiftId, token])
 
   function logout() {
     localStorage.removeItem('shiftscore_token')
@@ -1147,7 +1244,19 @@ function App() {
                   <div className="num">Score</div>
                 </div>
                 {recentShifts.map((s) => (
-                  <div key={s.id} className="trow">
+                  <div
+                    key={s.id}
+                    className="trow clickable"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openShiftDetail(s.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        openShiftDetail(s.id)
+                      }
+                    }}
+                  >
                     <div>{s.shift_date}</div>
                     <div>{spots.find((sp) => sp.id === s.spot_id)?.name ?? `#${s.spot_id}`}</div>
                     <div>{s.bartender_name}</div>
@@ -1159,6 +1268,340 @@ function App() {
               </div>
             )}
           </section>
+
+          {selectedShiftId !== null && (
+            <div
+              className="modal-backdrop"
+              role="dialog"
+              aria-modal="true"
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) closeShiftDetail()
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') closeShiftDetail()
+              }}
+              tabIndex={-1}
+            >
+              <div className="modal">
+                <div className="modal-header">
+                  <div>
+                    <div className="modal-title">Shift details</div>
+                    <div className="modal-subtitle">
+                      {selectedShift ? (
+                        <>
+                          {selectedShift.shift_date} • {spots.find((sp) => sp.id === selectedShift.spot_id)?.name ?? `#${selectedShift.spot_id}`} •{' '}
+                          {selectedShift.bartender_name}
+                        </>
+                      ) : (
+                        <>Loading…</>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="actions">
+                    {isOwner && selectedShift && (
+                      <button className="btn" onClick={() => setIsEditingShift((v) => !v)}>
+                        {isEditingShift ? 'Cancel edit' : 'Edit'}
+                      </button>
+                    )}
+                    <button className="btn" onClick={closeShiftDetail}>
+                      Close
+                    </button>
+                  </div>
+                </div>
+
+                {shiftModalErrorText && <div className="alert">{shiftModalErrorText}</div>}
+
+                {isLoadingShiftDetail || !selectedShift ? (
+                  <p className="muted">Loading shift…</p>
+                ) : (
+                  <div className="modal-body">
+                    <div className="modal-kpis">
+                      <div className="kpi">
+                        <div className="kpi-label">ShiftScore</div>
+                        <div className="kpi-value">{selectedShift.score_total?.toFixed(1) ?? '—'}</div>
+                      </div>
+                      <div className="kpi">
+                        <div className="kpi-label">% of bar sales</div>
+                        <div className="kpi-value">{formatPct(selectedShift.pct_of_bar_sales)}</div>
+                      </div>
+                      <div className="kpi">
+                        <div className="kpi-label">Tip %</div>
+                        <div className="kpi-value">{formatPct(selectedShift.tip_pct)}</div>
+                      </div>
+                      <div className="kpi">
+                        <div className="kpi-label">Sales / hour</div>
+                        <div className="kpi-value">{formatMoney(selectedShift.sales_per_hour)}</div>
+                      </div>
+                    </div>
+
+                    {isEditingShift && isOwner ? (
+                      <form
+                        className="form"
+                        onSubmit={async (e) => {
+                          e.preventDefault()
+                          if (!token || !selectedShift) return
+                          setIsSavingShift(true)
+                          setShiftModalErrorText(null)
+                          try {
+                            const updated = await apiPatch<ShiftOut>(
+                              `/api/shifts/${selectedShift.id}`,
+                              {
+                                spot_id: editShiftForm.spot_id,
+                                bartender_name: editShiftForm.bartender_name,
+                                shift_date: editShiftForm.shift_date,
+                                personal_sales_volume: editShiftForm.personal_sales_volume,
+                                total_bar_sales: editShiftForm.total_bar_sales,
+                                personal_tips: editShiftForm.personal_tips,
+                                hours_worked: editShiftForm.hours_worked,
+                                transactions_count: editShiftForm.transactions_count ?? null,
+                              } satisfies ShiftUpdate,
+                              token
+                            )
+
+                            setSelectedShift(updated)
+                            setRecentShifts((prev) => prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s)))
+                            setIsEditingShift(false)
+                          } catch (err) {
+                            setShiftModalErrorText(err instanceof Error ? err.message : 'Failed to save shift')
+                          } finally {
+                            setIsSavingShift(false)
+                          }
+                        }}
+                      >
+                        <div className="row">
+                          <label>
+                            Spot
+                            <select
+                              value={editShiftForm.spot_id ?? 0}
+                              onChange={(e) => setEditShiftForm((f) => ({ ...f, spot_id: Number(e.target.value) }))}
+                              required
+                            >
+                              <option value={0} disabled>
+                                Select…
+                              </option>
+                              {spots.map((sp) => (
+                                <option key={sp.id} value={sp.id}>
+                                  {sp.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            Shift date
+                            <input
+                              type="date"
+                              value={editShiftForm.shift_date ?? ''}
+                              onChange={(e) => setEditShiftForm((f) => ({ ...f, shift_date: e.target.value }))}
+                              required
+                            />
+                          </label>
+                        </div>
+
+                        <label>
+                          Bartender
+                          <input
+                            type="text"
+                            value={editShiftForm.bartender_name ?? ''}
+                            onChange={(e) => setEditShiftForm((f) => ({ ...f, bartender_name: e.target.value }))}
+                            required
+                          />
+                        </label>
+
+                        <div className="row">
+                          <label>
+                            Personal sales
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={editShiftForm.personal_sales_volume ?? 0}
+                              onChange={(e) =>
+                                setEditShiftForm((f) => ({ ...f, personal_sales_volume: Number(e.target.value) }))
+                              }
+                              required
+                            />
+                          </label>
+                          <label>
+                            Total bar sales
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={editShiftForm.total_bar_sales ?? 0}
+                              onChange={(e) => setEditShiftForm((f) => ({ ...f, total_bar_sales: Number(e.target.value) }))}
+                              required
+                            />
+                          </label>
+                        </div>
+
+                        <div className="row">
+                          <label>
+                            Tips
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={editShiftForm.personal_tips ?? 0}
+                              onChange={(e) => setEditShiftForm((f) => ({ ...f, personal_tips: Number(e.target.value) }))}
+                              required
+                            />
+                          </label>
+                          <label>
+                            Hours worked
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.25}
+                              value={editShiftForm.hours_worked ?? 0}
+                              onChange={(e) => setEditShiftForm((f) => ({ ...f, hours_worked: Number(e.target.value) }))}
+                              required
+                            />
+                          </label>
+                        </div>
+
+                        <label>
+                          Transactions (optional)
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            value={editShiftForm.transactions_count ?? ''}
+                            onChange={(e) =>
+                              setEditShiftForm((f) => ({
+                                ...f,
+                                transactions_count: e.target.value === '' ? null : Number(e.target.value),
+                              }))
+                            }
+                            placeholder="(optional)"
+                          />
+                        </label>
+
+                        <div className="actions">
+                          <button className="btn primary" type="submit" disabled={isSavingShift}>
+                            {isSavingShift ? 'Saving…' : 'Save changes'}
+                          </button>
+                          <button
+                            className="btn danger"
+                            type="button"
+                            disabled={isDeletingShift}
+                            onClick={async () => {
+                              if (!token || !selectedShift) return
+                              const ok = window.confirm('Delete this shift? This cannot be undone.')
+                              if (!ok) return
+                              setIsDeletingShift(true)
+                              setShiftModalErrorText(null)
+                              try {
+                                await apiDelete<ShiftDeleteOut>(`/api/shifts/${selectedShift.id}`, token)
+                                setRecentShifts((prev) => prev.filter((s) => s.id !== selectedShift.id))
+                                closeShiftDetail()
+                              } catch (err) {
+                                setShiftModalErrorText(err instanceof Error ? err.message : 'Failed to delete shift')
+                              } finally {
+                                setIsDeletingShift(false)
+                              }
+                            }}
+                          >
+                            {isDeletingShift ? 'Deleting…' : 'Delete shift'}
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <>
+                        <div className="modal-section">
+                          <div className="h3">Raw inputs</div>
+                          <div className="kv-grid">
+                            <div className="kv">
+                              <div className="kv-k">Personal sales</div>
+                              <div className="kv-v">{formatMoney(selectedShift.personal_sales_volume)}</div>
+                            </div>
+                            <div className="kv">
+                              <div className="kv-k">Total bar sales</div>
+                              <div className="kv-v">{formatMoney(selectedShift.total_bar_sales)}</div>
+                            </div>
+                            <div className="kv">
+                              <div className="kv-k">Tips</div>
+                              <div className="kv-v">{formatMoney(selectedShift.personal_tips)}</div>
+                            </div>
+                            <div className="kv">
+                              <div className="kv-k">Hours</div>
+                              <div className="kv-v">{formatNumber(selectedShift.hours_worked, 2)}</div>
+                            </div>
+                            <div className="kv">
+                              <div className="kv-k">Transactions</div>
+                              <div className="kv-v">{selectedShift.transactions_count ?? '—'}</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="modal-section">
+                          <div className="h3">Derived metrics</div>
+                          <div className="kv-grid">
+                            <div className="kv">
+                              <div className="kv-k">% of bar sales</div>
+                              <div className="kv-v">{formatPct(selectedShift.pct_of_bar_sales)}</div>
+                            </div>
+                            <div className="kv">
+                              <div className="kv-k">Tip %</div>
+                              <div className="kv-v">{formatPct(selectedShift.tip_pct)}</div>
+                            </div>
+                            <div className="kv">
+                              <div className="kv-k">Sales / hour</div>
+                              <div className="kv-v">{formatMoney(selectedShift.sales_per_hour)}</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="modal-section">
+                          <div className="h3">Subscores</div>
+                          <p className="muted">
+                            Each metric contributes points to the ShiftScore. (Normalized is 0–1.)
+                          </p>
+                          <div className="subscore-table">
+                            <div className="subscore-head">
+                              <div>Metric</div>
+                              <div className="num">Value</div>
+                              <div className="num">Normalized</div>
+                              <div className="num">Points</div>
+                            </div>
+                            {(
+                              [
+                                ['sales_volume', 'Sales volume'],
+                                ['pct_of_bar_sales', '% of bar sales'],
+                                ['tip_pct', 'Tip %'],
+                                ['sales_per_hour', 'Sales / hour'],
+                              ] as const
+                            ).map(([key, label]) => {
+                              const b = selectedShift.breakdown?.[key]
+                              const valueText =
+                                key === 'sales_volume'
+                                  ? formatMoney(b?.value ?? NaN)
+                                  : key === 'sales_per_hour'
+                                    ? formatMoney(b?.value ?? NaN)
+                                    : key === 'pct_of_bar_sales' || key === 'tip_pct'
+                                      ? formatPct(b?.value ?? NaN)
+                                      : String(b?.value ?? '—')
+
+                              return (
+                                <div key={key} className="subscore-row">
+                                  <div>{label}</div>
+                                  <div className="num">{b ? valueText : '—'}</div>
+                                  <div className="num">{b ? formatNumber(b.normalized, 3) : '—'}</div>
+                                  <div className="num">
+                                    <span className="score-pill">{b ? formatNumber(b.points, 1) : '—'}</span>
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           <section className="panel">
             <div className="panel-header">
